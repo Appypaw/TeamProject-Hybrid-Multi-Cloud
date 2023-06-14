@@ -1,0 +1,65 @@
+pipeline {
+    agent any
+
+    stages {
+        stage('Checkout GIT') {
+            steps {
+                checkout([$class: 'GitSCM',
+                          branches: [[name: '*/main']],
+                          doGenerateSubmoduleConfigurations: false,
+                          extensions: [[$class: 'CleanBeforeCheckout']],
+                          userRemoteConfigs: [[url: '']]  //깃 리포지토리 URL로 변경하기 
+                ])
+            }
+        }
+
+        stage('Zip') {
+            steps {
+                sh 'zip -r phpweb_${BUILD_NUMBER}.zip *.php style.css'
+            }
+        }
+        stage('upload to S3') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 's3-bucket-credentials-id', variable: 's3BucketCredentials')
+                ]) {
+                    script {
+                        try {
+                            withAWS(region: 'ap-northeast-2', credentials: 'aws-credentials-id') {
+                                sh "aws s3 cp phpweb_${BUILD_NUMBER}.zip s3://${s3BucketCredentials}/phpweb_${BUILD_NUMBER}.zip"
+                            }
+                        } catch(error) {
+                            print(error)
+                            env.cloneResult = false
+                            currentBuild.result = 'FAILURE'
+                        }             
+                    }
+                }
+            }
+        }
+
+        stage('deploy') {
+            steps {
+                withCredentials([
+                    string(credentialsId: 's3-bucket-credentials-id', variable: 's3BucketCredentials')
+                ]) {
+                    script {
+                        try {
+                            withAWS(region: 'ap-northeast-2', credentials: 'aws-credentials-id') {
+                                sh "aws elasticbeanstalk create-application-version --application-name Test12 \
+                                    --version-label beanstalk_v${BUILD_NUMBER} \
+                                    --source-bundle S3Bucket=\"\${s3BucketCredentials}\",S3Key=\"phpweb_${BUILD_NUMBER}.zip\""
+                                sh "aws elasticbeanstalk update-environment --environment-name Test12-env \
+                                    --version-label beanstalk_v${BUILD_NUMBER}"
+                            }
+                        } catch(error) {
+                            print(error)
+                            env.cloneResult = false
+                            currentBuild.result = 'FAILURE'
+                        }
+                    }
+                }
+            }
+        } 
+    }
+}
